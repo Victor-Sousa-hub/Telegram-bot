@@ -63,6 +63,7 @@ qb = Client(host='http://127.0.0.1:8080', username='admin', password='adminadmin
 Uso
 
 Comandos Disponíveis
+```makefile
 /start: Inicia o bot e exibe informações básicas.
 /buscar <termo>: Busca torrents usando a API do YTS.
 /torrent <magnet_link>: Adiciona um torrent pelo link magnet.
@@ -70,6 +71,7 @@ Comandos Disponíveis
 /pausar <nome_do_torrent>: Pausa um download ativo.
 /arquivos: Lista os arquivos baixados disponíveis no histórico.
 /listar_concluidos: Envia para o chat todos os downloads concluídos.
+```
 Estrutura do Projeto
 
 ```bash
