@@ -4,6 +4,7 @@ import logging
 from qbittorrentapi import Client
 import requests
 from uuid import uuid4
+from dotenv import load_dotenv
 import os
 
 ################################################################################################
@@ -16,7 +17,8 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # Substitua pelo token do bot
-TELEGRAM_TOKEN = "7956168457:AAG7Y9qqPT8dPIsSJbtJ3YG_w_U4mtqVGiU"
+load_dotenv()
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 #API de torrents
 YTS_API = "https://yts.mx/api/v2/list_movies.json"
