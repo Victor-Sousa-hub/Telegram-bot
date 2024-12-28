@@ -1,7 +1,6 @@
 from telegram import Update,InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes,CallbackQueryHandler
 import logging
-from qbittorrentapi import Client
 import requests
 from uuid import uuid4
 from dotenv import load_dotenv
@@ -19,15 +18,10 @@ logger = logging.getLogger(__name__)
 # Substitua pelo token do bot
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# Lista de IDs dos administradores autorizados
+ADMIN_IDS = os.getenv("ADMIN_IDS") 
+GROUP_ID = os.getenv("GROUP_ID")
 
-#API de torrents
-YTS_API = "https://yts.mx/api/v2/list_movies.json"
-
-# Dicionário para armazenar os magnet links temporariamente
-magnet_links_cache = {}
-
-#Conexão com qbittorrent web
-qb = Client(host='http://127.0.0.1:8080', username='admin', password='adminadmin')
 
 ################################################################################################
 #                                   FUNCIONALIDADES DO BOT                                     #
@@ -36,14 +30,82 @@ qb = Client(host='http://127.0.0.1:8080', username='admin', password='adminadmin
 # Função para o comando /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Comando /start recebido de {update.effective_user.first_name}")
-    await update.message.reply_text("""Bem-vindo ao Bot de Torrents! Aqui você pode buscar, baixar e acessar arquivos diretamente no Telegram.
+    await update.message.reply_text(
+        """Bem-vindo ao Bot de Gerenciamento de Grupos! Aqui você pode gerenciar membros e enviar notificações de forma prática.        
 Comandos disponíveis:
-- /buscar <termo>: Procurar torrents.
-- /downloads: Verificar downloads ativos.
-- /arquivos: Listar arquivos disponíveis.""")
 
+**Gerenciamento de Membros:**
+- `/adicionar`: Gerar um link de convite para adicionar membros ao grupo.
+- `/remover <ID do usuário>`: Remover um membro do grupo pelo ID.
+
+**Notificações:**
+- `/notificar <ID ou @username> <mensagem>`: Enviar uma mensagem para um membro ou grupo específico.
+        """
+    )
+
+async def painel_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    # Verifica se o usuário é um administrador autorizado
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("Você não tem permissão para acessar o painel administrativo.")
+        return
+
+    # Envia a mensagem com as opções do painel
+    keyboard = [
+        [InlineKeyboardButton("Listar Usuários", callback_data="listar_usuarios")],
+        [InlineKeyboardButton("Enviar Notificação", callback_data="enviar_notificacao")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text("Painel Administrativo:\nEscolha uma ação:", reply_markup=reply_markup)
+
+
+
+async def listar_usuarios_painel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        query = update.callback_query
+        await query.answer()
+
+        chat_id = -1001234567890  # Substitua pelo ID do grupo que será gerenciado
+        membros = await context.bot.get_chat_members(chat_id)
+
+        # Cria botões para cada usuário
+        keyboard = []
+        for membro in membros:
+            user = membro.user
+            if not user.is_bot:
+                keyboard.append(
+                    [InlineKeyboardButton(f"Remover {user.first_name}", callback_data=f"remover:{user.id}")]
+                )
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("Selecione um usuário para remover:", reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"Erro ao listar usuários no painel: {e}")
+        await query.edit_message_text(f"Erro ao listar usuários: {e}")
+
+
+
+async def remover_usuario_painel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        query = update.callback_query
+        await query.answer()
+
+        data = query.data
+        if data.startswith("remover:"):
+            user_id = int(data.split(":")[1])
+            chat_id = GROUP_ID  # Substitua pelo ID do grupo
+
+            # Remove o usuário
+            await context.bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+            await query.edit_message_text(f"Usuário com ID {user_id} foi removido do grupo!")
+    except Exception as e:
+        logger.error(f"Erro ao remover usuário pelo painel: {e}")
+        await query.edit_message_text(f"Erro ao remover usuário: {e}")
+        
 # Função para adicionar um usuário ao grupo
-async def adicionar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def adicionar_membro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Verifica se o bot tem permissões de administrador
         chat = update.effective_chat
@@ -61,7 +123,7 @@ async def adicionar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Erro ao adicionar usuário: {e}")
 
 # Função para remover um usuário do grupo
-async def remover(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def remover_membro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Verifica se o bot tem permissões de administrador
         chat = update.effective_chat
@@ -81,309 +143,98 @@ async def remover(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Erro ao remover usuário: {e}")
         await update.message.reply_text(f"Erro ao remover usuário: {e}")
 
-# Função para adicioanr torrent ao qbittorrent
-async def adicionar_torrent(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+
+async def enviar_notificacao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        # Verifica se o argumento foi passado
-        if not context.args:
-            await update.message.reply_text("Por favor, forneça o link magnet do torrent.")
+        if len(context.args) < 2:
+            await update.message.reply_text("Uso: /notificar <ID ou @username> <mensagem>")
             return
-        
-        # Adiciona o torrent
-        magnet_link = " ".join(context.args)
-        qb.auth_log_in()
-        qb.torrents_add(urls=magnet_link)
-        
-        # Resposta de sucesso
-        await update.message.reply_text(f"Torrent adicionado com sucesso: {magnet_link}")
-        logger.info(f"Torrent adicionado: {magnet_link}")
+
+        # Extrai os argumentos
+        target = context.args[0]
+        mensagem = " ".join(context.args[1:])
+
+        # Envia a mensagem
+        await context.bot.send_message(chat_id=target, text=mensagem)
+        await update.message.reply_text(f"Mensagem enviada para {target}!")
     except Exception as e:
-        # Registro detalhado do erro
-        error_message = f"Erro ao adicionar torrent: {e}"
-        logger.error(error_message)
-        logger.debug(traceback.format_exc())  # Registro detalhado com traceback
-        await update.message.reply_text(error_message)
+        logger.error(f"Erro ao enviar notificação: {e}")
+        await update.message.reply_text(f"Erro ao enviar notificação: {e}")
 
-# Função para listar os torrents do usuario
-async def listar_downloads(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        qb.auth_log_in()
-        torrents = qb.torrents_info()
-        if not torrents:
-            await update.message.reply_text("Nenhum download ativo.")
+        chat = update.effective_chat  # Grupo onde o comando foi chamado
+        bot_member = await chat.get_member(context.bot.id)
+
+        # Verifica se o bot tem permissões de administrador
+        if bot_member.status != "administrator":
+            await update.message.reply_text("Eu preciso ser administrador para listar membros!")
             return
 
-        mensagem = "Downloads Ativos:\n"
-        for torrent in torrents:
-            mensagem += f"{torrent['name']} - {torrent['progress']*100:.2f}%\n"
-        await update.message.reply_text(mensagem)
-    except Exception as e:
-        await update.message.reply_text(f"Erro ao listar downloads: {e}")
-        print(f"Erro ao listar downloads: {e}")
+        # Obtém todos os membros do grupo
+        membros = await context.bot.get_chat_administrators(chat_id=chat.id)
 
-# Função para pausar torrent em execução
-async def pausar_torrent(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if context.args:
-            nome = " ".join(context.args)
-            qb.auth_log_in()
-            torrents = qb.torrents_info()
-            for torrent in torrents:
-                if nome.lower() in torrent['name'].lower():
-                    qb.torrents_pause(torrent_hashes=torrent['hash'])
-                    await update.message.reply_text(f"Torrent pausado: {torrent['name']}")
-                    return
-            await update.message.reply_text("Torrent não encontrado.")
-        else:
-            await update.message.reply_text("Por favor, forneça o nome do torrent para pausar.")
-    except Exception as e:
-        await update.message.reply_text(f"Erro ao pausar torrent: {e}")
-        print(f"Erro ao pausar torrent: {e}")
-
-# Função para buscar torrent na API
-async def buscar_torrents(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if not context.args:
-            await update.message.reply_text("Por favor, forneça o termo para busca. Exemplo: /buscar <nome do filme>")
-            return
-        
-        termo = " ".join(context.args)
-        params = {"query_term": termo, "limit": 5}  # Limitar a 5 resultados
-        response = requests.get(YTS_API, params=params)
-        
-        if response.status_code != 200:
-            await update.message.reply_text("Erro ao buscar torrents.")
-            return
-
-        data = response.json()
-        if not data.get("data", {}).get("movies"):
-            await update.message.reply_text("Nenhum torrent encontrado.")
-            return
-
-        # Construindo lista de resultados
+        # Cria uma lista com botões para cada membro
         keyboard = []
-        for movie in data["data"]["movies"]:
-            title = movie["title"]
-            torrents = movie["torrents"]
-            for torrent in torrents:
-                quality = torrent["quality"]
-                magnet = f"magnet:?xt=urn:btih:{torrent['hash']}&dn={title}&tr=udp://tracker.openbittorrent.com:80"
-
-                # Gerar um ID único para armazenar o magnet
-                magnet_id = str(uuid4())
-                magnet_links_cache[magnet_id] = magnet
-
-                # Adicionar botão com ID no callback_data
-                button = InlineKeyboardButton(
-                    text=f"{title} ({quality})",
-                    callback_data=magnet_id
+        for membro in membros:
+            user = membro.user
+            if not user.is_bot:  # Ignorar bots
+                keyboard.append(
+                    [InlineKeyboardButton(f"Remover {user.first_name}", callback_data=f"remover:{user.id}")]
                 )
-                keyboard.append([button])  # Cada botão em uma nova linha
 
-        # Envia a mensagem com botões
+        # Envia a lista de botões ao administrador
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("Selecione um torrent para adicionar:", reply_markup=reply_markup)
+        await update.message.reply_text("Selecione um usuário para remover:", reply_markup=reply_markup)
 
     except Exception as e:
-        await update.message.reply_text(f"Erro ao buscar torrents: {e}")
-        print(f"Erro ao buscar torrents: {e}")
+        logger.error(f"Erro ao listar usuários: {e}")
+        await update.message.reply_text(f"Erro ao listar usuários: {e}")
 
-# Função que adicona o torrent buscado
-async def adicionar_por_botao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def callback_remover_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         query = update.callback_query
-        magnet_id = query.data  # ID único recebido no callback_data
+        await query.answer()
 
-        # Recuperar o magnet link do cache
-        magnet_link = magnet_links_cache.get(magnet_id)
-        if not magnet_link:
-            await query.answer("Erro: Magnet link não encontrado.")
-            return
+        # Extrai o ID do usuário do callback_data
+        data = query.data
+        if data.startswith("remover:"):
+            user_id = int(data.split(":")[1])
+            chat_id = query.message.chat.id
 
-        # Adicionar o torrent ao cliente
-        qb.auth_log_in()
-        qb.torrents_add(urls=magnet_link)
-
-        # Confirmação ao usuário
-        await query.answer("Torrent adicionado com sucesso!")
-        await query.edit_message_text(text="Torrent adicionado com sucesso!")
-        print(f"Torrent adicionado: {magnet_link}")
+            # Remove o usuário do grupo
+            await context.bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+            await query.edit_message_text(f"Usuário com ID {user_id} foi removido do grupo!")
     except Exception as e:
-        await query.answer("Erro ao adicionar torrent.")
-        print(f"Erro ao adicionar torrent: {e}")
+        logger.error(f"Erro ao remover usuário pelo botão: {e}")
+        await query.edit_message_text(f"Erro ao remover usuário: {e}")
 
-# Função que verifica periodicamente se o download foi concluido
-async def verificar_downloads(context: ContextTypes.DEFAULT_TYPE):
-    try:
-        qb.auth_log_in()
-        torrents = qb.torrents_info()
-
-        for torrent in torrents:
-            if torrent["state"] == "completed":  # Estado "completed" detectado
-                arquivo_path = os.path.join(torrent["save_path"], torrent["name"])
-
-                # Enviar o arquivo para o chat
-                chat_id = context.job.data["chat_id"]
-                nome_arquivo = torrent["name"]
-                await enviar_arquivo_para_chat(context.bot, chat_id, arquivo_path, nome_arquivo)
-
-                # Notificar o usuário
-                await context.bot.send_message(chat_id, text=f"Download concluído: {nome_arquivo}")
-
-    except Exception as e:
-        print(f"Erro ao verificar downloads: {e}")
-# Função que envia o arquivo depois de baixado para o chat
-async def enviar_arquivo_para_chat(bot, chat_id, arquivo_path, nome_arquivo):
-    try:
-        # Verifica se o arquivo existe
-        if not os.path.exists(arquivo_path):
-            await bot.send_message(chat_id, f"Erro: O arquivo '{nome_arquivo}' não foi encontrado.")
-            return
-
-        # Envia o arquivo como documento ou vídeo
-        if nome_arquivo.lower().endswith((".mp4", ".mkv", ".avi")):
-            with open(arquivo_path, "rb") as video:
-                await bot.send_video(chat_id, video=video, supports_streaming=True, caption=f"🎥 {nome_arquivo}")
-        else:
-            with open(arquivo_path, "rb") as document:
-                await bot.send_document(chat_id, document=document, caption=f"📁 {nome_arquivo}")
-
-    except Exception as e:
-        print(f"Erro ao enviar arquivo '{arquivo_path}': {e}")
-# Função para listar os arquivos baixados
-async def listar_arquivos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    usuario_id = update.effective_user.id
-    conn = sqlite3.connect("historico.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT nome_arquivo, arquivo_id FROM historico WHERE usuario_id = ?", (usuario_id,))
-    arquivos = cursor.fetchall()
-    conn.close()
-
-    if not arquivos:
-        await update.message.reply_text("Você não tem nenhum arquivo disponível.")
-        return
-
-    mensagem = "📂 Seus Arquivos:\n"
-    for nome, arquivo_id in arquivos:
-        mensagem += f"- {nome}: /arquivo_{arquivo_id}\n"
-
-    await update.message.reply_text(mensagem)
-
-# Função que envia o historico de arquivos baixados
-async def enviar_arquivo_historico(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    comando = update.message.text
-    arquivo_id = comando.split("_")[-1]
-
-    conn = sqlite3.connect("historico.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT nome_arquivo, arquivo_id FROM historico WHERE arquivo_id = ?", (arquivo_id,))
-    arquivo = cursor.fetchone()
-    conn.close()
-
-    if not arquivo:
-        await update.message.reply_text("Arquivo não encontrado.")
-        return
-
-    nome_arquivo, arquivo_id = arquivo
-    await update.message.reply_document(document=arquivo_id, caption=f"📁 {nome_arquivo}")
-
-async def listar_concluidos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        qb.auth_log_in()
-        torrents = qb.torrents_info()
-        chat_id = update.effective_chat.id
-
-        concluidos = [torrent for torrent in torrents if torrent["state"] == "completed"]
-
-        if not concluidos:
-            await update.message.reply_text("Nenhum download concluído encontrado.")
-            return
-
-        # Enviar arquivos concluídos
-        for torrent in concluidos:
-            arquivo_path = os.path.join(torrent["save_path"], torrent["name"])
-            nome_arquivo = torrent["name"]
-
-            await enviar_arquivo_para_chat(context.bot, chat_id, arquivo_path, nome_arquivo)
-
-        await update.message.reply_text("Todos os downloads concluídos foram enviados para o chat.")
-
-    except Exception as e:
-        print(f"Erro ao listar e enviar downloads concluídos: {e}")
-        await update.message.reply_text("Ocorreu um erro ao listar downloads concluídos.")
-        
 ################################################################################################
 #                                       FUNÇÕES AUXILIARES                                     #
 ################################################################################################
 
         
-from threading import Timer
-# Função para limpar o cache a cada 10 minutos
-def limpar_cache():
-    global magnet_links_cache
-    magnet_links_cache = {}
-    print("Cache de magnet links limpo.")
-# Agendar a limpeza do cache
-def agendar_limpeza():
-    Timer(600, limpar_cache).start()  # 600 segundos = 10 minutos
 
-
-import sqlite3
-# Iniciando o banco de dados
-def init_db():
-    conn = sqlite3.connect("historico.db")
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS historico (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario_id INTEGER NOT NULL,
-            nome_arquivo TEXT NOT NULL,
-            arquivo_id TEXT NOT NULL
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-# Função para salvar no banco de dados
-def salvar_no_historico(usuario_id, nome_arquivo, arquivo_id):
-    conn = sqlite3.connect("historico.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO historico (usuario_id, nome_arquivo, arquivo_id) VALUES (?, ?, ?)",
-                   (usuario_id, nome_arquivo, arquivo_id))
-    conn.commit()
-    conn.close()
-    
-
-# Função principal para rodar o bot
 def main():
     try:
         # Inicializa o Application
         application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-        # Adiciona os handlers para comandos
-        application.add_handler(CommandHandler("adicionar_user", adicionar))
-        application.add_handler(CommandHandler("remover_user", remover))
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("torrent",adicionar_torrent))
-        application.add_handler(CommandHandler("downloads", listar_downloads))
-        application.add_handler(CommandHandler("pausar", pausar_torrent))
-        application.add_handler(CommandHandler("buscar", buscar_torrents))
-        application.add_handler(CommandHandler("arquivos", listar_arquivos))
-        application.add_handler(CommandHandler("arquivo_", enviar_arquivo_historico))
-        application.add_handler(CommandHandler("adicionar",verificar_downloads))
-        application.add_handler(CommandHandler("listar_concluidos", listar_concluidos))
-        application.add_handler(CallbackQueryHandler(adicionar_por_botao)) 
+        # Handlers do painel administrativo
+        application.add_handler(CommandHandler("painel_admin", painel_admin))  # Acessar painel
+        application.add_handler(CallbackQueryHandler(listar_usuarios_painel, pattern="^listar_usuarios$"))  # Listar usuários
+        application.add_handler(CallbackQueryHandler(remover_usuario_painel, pattern="^remover:"))  # Remover usuário
 
-                
+        # Outros handlers
+        application.add_handler(CommandHandler("start", start))
+
         # Inicia o bot
         logger.info("Bot iniciado. Aguardando mensagens...")
         application.run_polling()
     except Exception as e:
-        logger.error(f"Erro ao iniciar o bot: {e}")
+        logger.error(f"Erro ao iniciar o bot: {e}")    
 
 if __name__ == "__main__":
-    agendar_limpeza()
-    
-    init_db()  # Inicializa o banco de dados
-
     main()
